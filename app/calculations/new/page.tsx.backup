@@ -1,0 +1,387 @@
+'use client'
+
+import { useState, useMemo, useCallback, useEffect } from 'react'
+import { useRouter } from 'next/navigation'
+import { supabase } from '@/lib/supabase'
+import {
+  SERVICE_TYPES,
+  getSubTypes,
+  calculateServicePrice,
+  VAT_RATE
+} from '@/lib/rates'
+import type { Profile } from '@/lib/supabase'
+
+interface Service {
+  id: string
+  type: string
+  subType: string
+  quantity: number
+  price: number
+}
+
+export default function NewCalculationPage() {
+  const router = useRouter()
+  const [profile, setProfile] = useState<Profile | null>(null)
+  const [services, setServices] = useState<Service[]>([])
+  const [saving, setSaving] = useState(false)
+  const [notification, setNotification] = useState<{
+    show: boolean
+    message: string
+    type: 'success' | 'error'
+  }>({ show: false, message: '', type: 'success' })
+
+  useEffect(() => {
+    checkUser()
+    // Add initial service
+    addService()
+  }, [])
+
+  async function checkUser() {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) {
+      router.push('/auth/login')
+      return
+    }
+
+    const { data: profileData } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', user.id)
+      .single()
+
+    if (profileData) {
+      setProfile(profileData)
+    }
+  }
+
+  function addService() {
+    const newService: Service = {
+      id: Date.now().toString(),
+      type: 'signature',
+      subType: 'first',
+      quantity: 1,
+      price: 193
+    }
+    setServices([...services, newService])
+  }
+
+  function removeService(id: string) {
+    setServices(services.filter(s => s.id !== id))
+  }
+
+  function updateService(id: string, field: keyof Service, value: any) {
+    setServices(services.map(service => {
+      if (service.id === id) {
+        const updated = { ...service, [field]: value }
+
+        // If type changed, reset subType to first option
+        if (field === 'type') {
+          const subTypes = getSubTypes(value)
+          updated.subType = subTypes[0]?.value || ''
+          updated.price = calculateServicePrice(
+            updated.type,
+            updated.subType,
+            updated.quantity
+          )
+        }
+
+        // If subType or quantity changed, recalculate price
+        if (field === 'subType' || field === 'quantity') {
+          updated.price = calculateServicePrice(
+            updated.type,
+            updated.subType,
+            updated.quantity
+          )
+        }
+
+        return updated
+      }
+      return service
+    }))
+  }
+
+  const calculations = useMemo(() => {
+    const subtotal = services.reduce((sum, s) => sum + s.price, 0)
+    const vat = subtotal * VAT_RATE
+    const total = subtotal + vat
+
+    return {
+      subtotal: subtotal.toFixed(2),
+      vat: vat.toFixed(2),
+      total: total.toFixed(2)
+    }
+  }, [services])
+
+  async function saveCalculation() {
+    setSaving(true)
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) throw new Error('לא מחובר')
+
+      const { error } = await supabase.from('calculations').insert({
+        user_id: user.id,
+        services: services.map(s => ({
+          id: s.id,
+          type: s.type,
+          subType: s.subType,
+          quantity: s.quantity,
+          price: s.price
+        })),
+        subtotal: parseFloat(calculations.subtotal),
+        vat: parseFloat(calculations.vat),
+        total: parseFloat(calculations.total)
+      })
+
+      if (error) throw error
+
+      showNotification('החישוב נשמר בהצלחה!', 'success')
+      setTimeout(() => router.push('/dashboard'), 1500)
+    } catch (err: any) {
+      showNotification(err.message || 'שגיאה בשמירה', 'error')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  function showNotification(message: string, type: 'success' | 'error') {
+    setNotification({ show: true, message, type })
+    setTimeout(() => setNotification({ show: false, message: '', type: 'success' }), 3000)
+  }
+
+  function exportToPDF() {
+    window.print()
+    showNotification('הדפס או שמור כ-PDF', 'success')
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50" data-theme={profile?.theme || 'light'} data-accent={profile?.accent_color || 'blue'}>
+      {/* Header */}
+      <header className="bg-white border-b border-gray-200 print:hidden">
+        <div className="max-w-7xl mx-auto px-6 py-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ backgroundColor: 'var(--primary-color)' }}>
+                <span className="text-white text-xl font-bold">N</span>
+              </div>
+              <div>
+                <h1 className="text-xl font-bold" style={{ color: 'var(--text-primary)' }}>NotaryCalc Pro</h1>
+                {profile?.office_name && (
+                  <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>{profile.office_name}</p>
+                )}
+              </div>
+            </div>
+            <button
+              onClick={() => router.push('/dashboard')}
+              className="px-4 py-2 text-sm hover:bg-gray-100 rounded-lg transition-colors"
+              style={{ color: 'var(--text-secondary)' }}
+            >
+              ← חזרה ל-Dashboard
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {/* Main Content */}
+      <main className="max-w-6xl mx-auto px-6 py-8">
+        <div className="grid lg:grid-cols-3 gap-6">
+          {/* Services Panel */}
+          <div className="lg:col-span-2">
+            <div className="bg-white rounded-2xl shadow-sm p-8 border border-gray-100">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-xl font-bold" style={{ color: 'var(--text-primary)' }}>
+                  שירותים
+                </h2>
+                <button
+                  onClick={addService}
+                  className="px-3 py-2 text-sm text-white rounded-lg font-medium transition-all shadow-sm hover:shadow-md flex items-center gap-1"
+                  style={{ backgroundColor: 'var(--primary-color)' }}
+                >
+                  <span>+</span>
+                  הוסף שירות
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                {services.length === 0 ? (
+                  <div className="text-center py-12">
+                    <p style={{ color: 'var(--text-secondary)' }}>
+                      לחץ על "הוסף שירות" להתחלת חישוב
+                    </p>
+                  </div>
+                ) : (
+                  services.map((service, index) => (
+                    <div key={service.id} className="border rounded-lg p-4 bg-gray-50" style={{ borderColor: 'var(--border-color)' }}>
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                        {/* Service Type */}
+                        <div>
+                          <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>
+                            סוג שירות
+                          </label>
+                          <select
+                            value={service.type}
+                            onChange={(e) => updateService(service.id, 'type', e.target.value)}
+                            className="w-full px-2 py-1.5 text-sm border rounded-lg"
+                            style={{
+                              borderColor: 'var(--border-color)',
+                              backgroundColor: 'var(--bg-primary)',
+                              color: 'var(--text-primary)'
+                            }}
+                          >
+                            {SERVICE_TYPES.map(type => (
+                              <option key={type.value} value={type.value}>
+                                {type.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        {/* Sub Type */}
+                        <div>
+                          <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>
+                            פירוט
+                          </label>
+                          <select
+                            value={service.subType}
+                            onChange={(e) => updateService(service.id, 'subType', e.target.value)}
+                            className="w-full px-2 py-1.5 text-sm border rounded-lg"
+                            style={{
+                              borderColor: 'var(--border-color)',
+                              backgroundColor: 'var(--bg-primary)',
+                              color: 'var(--text-primary)'
+                            }}
+                          >
+                            {getSubTypes(service.type).map(subType => (
+                              <option key={subType.value} value={subType.value}>
+                                {subType.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        {/* Quantity */}
+                        <div>
+                          <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>
+                            כמות
+                          </label>
+                          <input
+                            type="number"
+                            min="1"
+                            value={service.quantity}
+                            onChange={(e) => updateService(service.id, 'quantity', parseInt(e.target.value) || 1)}
+                            className="w-full px-2 py-1.5 text-sm border rounded-lg"
+                            style={{
+                              borderColor: 'var(--border-color)',
+                              backgroundColor: 'var(--bg-primary)',
+                              color: 'var(--text-primary)'
+                            }}
+                          />
+                        </div>
+
+                        {/* Price + Remove */}
+                        <div className="flex items-end gap-2">
+                          <div className="flex-1">
+                            <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>
+                              מחיר
+                            </label>
+                            <div className="px-2 py-1.5 text-sm border rounded-lg font-semibold" style={{
+                              borderColor: 'var(--border-color)',
+                              backgroundColor: 'var(--bg-secondary)',
+                              color: 'var(--primary-color)'
+                            }}>
+                              ₪{service.price.toFixed(2)}
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => removeService(service.id)}
+                            className="px-2 py-1.5 text-red-600 rounded-lg hover:bg-red-50 transition-colors"
+                            title="הסר"
+                          >
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                            </svg>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Summary Panel */}
+          <div className="lg:col-span-1">
+            <div className="bg-white rounded-2xl shadow-sm p-6 border border-gray-100 sticky top-6">
+              <h3 className="text-lg font-bold mb-4" style={{ color: 'var(--text-primary)' }}>
+                סיכום
+              </h3>
+
+              <div className="space-y-3 mb-6">
+                <div className="flex justify-between text-sm">
+                  <span style={{ color: 'var(--text-secondary)' }}>סכום שירותים:</span>
+                  <span className="font-semibold" style={{ color: 'var(--text-primary)' }}>
+                    ₪{calculations.subtotal}
+                  </span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span style={{ color: 'var(--text-secondary)' }}>מע״מ (18%):</span>
+                  <span className="font-semibold" style={{ color: 'var(--text-primary)' }}>
+                    ₪{calculations.vat}
+                  </span>
+                </div>
+                <div className="border-t pt-3" style={{ borderColor: 'var(--border-color)' }}>
+                  <div className="flex justify-between items-center">
+                    <span className="font-bold" style={{ color: 'var(--text-primary)' }}>
+                      סה״כ לתשלום:
+                    </span>
+                    <span className="text-xl font-bold" style={{ color: 'var(--primary-color)' }}>
+                      ₪{calculations.total}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <button
+                  onClick={saveCalculation}
+                  disabled={saving || services.length === 0}
+                  className="w-full px-4 py-2.5 text-sm text-white rounded-lg font-medium transition-all shadow-sm hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
+                  style={{ backgroundColor: 'var(--primary-color)' }}
+                >
+                  {saving ? 'שומר...' : 'שמור חישוב'}
+                </button>
+
+                <button
+                  onClick={exportToPDF}
+                  disabled={services.length === 0}
+                  className="w-full px-4 py-2.5 text-sm border-2 rounded-lg font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                  style={{
+                    borderColor: 'var(--primary-color)',
+                    color: 'var(--primary-color)'
+                  }}
+                >
+                  ייצא ל-PDF
+                </button>
+              </div>
+
+              <p className="text-xs text-center mt-4" style={{ color: 'var(--text-secondary)' }}>
+                מבוסס על תקנות הנוטריונים, תשל״ט-1978
+              </p>
+            </div>
+          </div>
+        </div>
+      </main>
+
+      {/* Notification */}
+      {notification.show && (
+        <div
+          className={`fixed top-6 left-6 px-6 py-4 rounded-lg shadow-xl z-50 ${
+            notification.type === 'success' ? 'bg-green-500' : 'bg-red-500'
+          } text-white font-medium`}
+        >
+          {notification.message}
+        </div>
+      )}
+    </div>
+  )
+}

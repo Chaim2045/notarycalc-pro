@@ -64,6 +64,9 @@ export async function POST(req: NextRequest) {
       success_url: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard?success=true`,
       cancel_url: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard?canceled=true`,
       locale: 'auto',
+      metadata: {
+        supabase_user_id: user.id,
+      },
       subscription_data: {
         metadata: {
           supabase_user_id: user.id,

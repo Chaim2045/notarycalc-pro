@@ -1,7 +1,9 @@
 'use client'
 
-import { useState, useCallback, useMemo } from 'react'
+import { useState, useCallback, useMemo, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
+import { createClientComponentClient } from '@supabase/auth-helpers-nextjs'
+import { logger } from '@/lib/logger'
 import {
   RATES,
   VAT_RATE,
@@ -470,6 +472,8 @@ function CalculationBreakdown({ service }: { service: Service }) {
 // Main Calculator Component
 export default function NewCalculationPage() {
   const router = useRouter()
+  const supabase = createClientComponentClient()
+
   const [services, setServices] = useState<Service[]>([
     {
       id: 1,
@@ -484,6 +488,33 @@ export default function NewCalculationPage() {
       translationWords: 0,
     },
   ])
+
+  const [clients, setClients] = useState<Array<{ id: string; name: string }>>([])
+  const [selectedClientId, setSelectedClientId] = useState<string>('')
+  const [clientName, setClientName] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    loadClients()
+  }, [])
+
+  async function loadClients() {
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
+
+      const { data, error } = await supabase
+        .from('clients')
+        .select('id, name')
+        .eq('user_id', user.id)
+        .order('name')
+
+      if (error) throw error
+      setClients(data || [])
+    } catch (error) {
+      logger.error('Error loading clients:', error)
+    }
+  }
 
   const addService = useCallback(() => {
     setServices((prev) => [
@@ -629,9 +660,40 @@ export default function NewCalculationPage() {
     }
   }, [services])
 
-  const handleSave = useCallback(() => {
-    alert('החישוב נשמר בהצלחה!')
-  }, [])
+  const handleSave = useCallback(async () => {
+    if (!clientName.trim() && !selectedClientId) {
+      alert('נא להזין שם לקוח או לבחור מהרשימה')
+      return
+    }
+
+    try {
+      setSaving(true)
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) throw new Error('Not authenticated')
+
+      const { error } = await supabase
+        .from('calculations')
+        .insert({
+          user_id: user.id,
+          client_id: selectedClientId || null,
+          client_name: selectedClientId ? clients.find(c => c.id === selectedClientId)?.name : clientName,
+          services: JSON.stringify(services),
+          subtotal: parseFloat(calculations.subtotal),
+          vat: parseFloat(calculations.vat),
+          total: parseFloat(calculations.total),
+        })
+
+      if (error) throw error
+
+      alert('החישוב נשמר בהצלחה!')
+      router.push('/calculations/history')
+    } catch (error) {
+      logger.error('Error saving calculation:', error)
+      alert('שגיאה בשמירת החישוב')
+    } finally {
+      setSaving(false)
+    }
+  }, [clientName, selectedClientId, services, calculations, clients, supabase, router])
 
   const handleExportPDF = useCallback(() => {
     window.print()
@@ -705,6 +767,46 @@ export default function NewCalculationPage() {
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 sticky top-6">
               <h2 className="text-xl font-bold text-gray-900 mb-6">סיכום חישוב</h2>
 
+              {/* Client Selection */}
+              <div className="mb-6 pb-6 border-b border-gray-200">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  לקוח
+                </label>
+                <select
+                  value={selectedClientId}
+                  onChange={(e) => {
+                    setSelectedClientId(e.target.value)
+                    if (e.target.value) {
+                      setClientName('')
+                    }
+                  }}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent mb-2"
+                >
+                  <option value="">בחר לקוח קיים</option>
+                  {clients.map((client) => (
+                    <option key={client.id} value={client.id}>
+                      {client.name}
+                    </option>
+                  ))}
+                </select>
+
+                <div className="text-center text-sm text-gray-500 my-2">או</div>
+
+                <input
+                  type="text"
+                  placeholder="הזן שם לקוח חדש"
+                  value={clientName}
+                  onChange={(e) => {
+                    setClientName(e.target.value)
+                    if (e.target.value) {
+                      setSelectedClientId('')
+                    }
+                  }}
+                  disabled={!!selectedClientId}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
+                />
+              </div>
+
               <div className="space-y-4">
                 <div className="flex justify-between items-center pb-4 border-b border-gray-200">
                   <span className="text-sm text-gray-600">סכום ביניים</span>
@@ -725,12 +827,13 @@ export default function NewCalculationPage() {
               <div className="mt-8 space-y-3">
                 <button
                   onClick={handleSave}
-                  className="w-full px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium transition-all flex items-center justify-center gap-2"
+                  disabled={saving}
+                  className="w-full px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
                   </svg>
-                  שמור חישוב
+                  {saving ? 'שומר...' : 'שמור חישוב'}
                 </button>
 
                 <button

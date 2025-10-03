@@ -99,11 +99,16 @@ export async function POST(req: NextRequest) {
             status = 'expired'
           }
 
+          // Get end date - current_period_end is a number (Unix timestamp)
+          const endDate = subscription.current_period_end
+            ? new Date(subscription.current_period_end * 1000).toISOString()
+            : new Date().toISOString()
+
           await supabaseAdmin
             .from('profiles')
             .update({
               subscription_status: status,
-              subscription_end_date: new Date(subscription.current_period_end * 1000).toISOString(),
+              subscription_end_date: endDate,
             })
             .eq('id', userId)
         }

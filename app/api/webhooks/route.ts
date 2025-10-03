@@ -87,7 +87,7 @@ export async function POST(req: NextRequest) {
       }
 
       case 'customer.subscription.updated': {
-        const subscription = event.data.object as Stripe.Subscription
+        const subscription = event.data.object as any // Use 'any' to access current_period_end
         const userId = subscription.metadata?.supabase_user_id
 
         if (userId) {
@@ -99,7 +99,7 @@ export async function POST(req: NextRequest) {
             status = 'expired'
           }
 
-          // Get end date - current_period_end is a number (Unix timestamp)
+          // Get end date from current_period_end (Unix timestamp)
           const endDate = subscription.current_period_end
             ? new Date(subscription.current_period_end * 1000).toISOString()
             : new Date().toISOString()
@@ -132,28 +132,31 @@ export async function POST(req: NextRequest) {
       }
 
       case 'invoice.payment_failed': {
-        const invoice = event.data.object as Stripe.Invoice
-        const subscription = await stripe.subscriptions.retrieve(invoice.subscription as string)
-        const userId = subscription.metadata?.supabase_user_id
+        const invoice = event.data.object as any // Use 'any' to access subscription
 
-        if (userId) {
-          await supabaseAdmin
-            .from('profiles')
-            .update({
-              subscription_status: 'expired',
-            })
-            .eq('id', userId)
+        if (invoice.subscription) {
+          const subscription = await stripe.subscriptions.retrieve(invoice.subscription as string)
+          const userId = subscription.metadata?.supabase_user_id
 
-          // Record failed payment
-          await supabaseAdmin
-            .from('payments')
-            .insert({
-              user_id: userId,
-              amount: (invoice.amount_due || 0) / 100,
-              currency: invoice.currency?.toUpperCase() || 'ILS',
-              status: 'failed',
-              stripe_payment_id: invoice.payment_intent as string,
-            })
+          if (userId) {
+            await supabaseAdmin
+              .from('profiles')
+              .update({
+                subscription_status: 'expired',
+              })
+              .eq('id', userId)
+
+            // Record failed payment
+            await supabaseAdmin
+              .from('payments')
+              .insert({
+                user_id: userId,
+                amount: (invoice.amount_due || 0) / 100,
+                currency: invoice.currency?.toUpperCase() || 'ILS',
+                status: 'failed',
+                stripe_payment_id: invoice.payment_intent as string,
+              })
+          }
         }
         break
       }

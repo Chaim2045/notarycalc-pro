@@ -64,18 +64,15 @@ export default function SignupPage() {
       if (signUpError) throw signUpError
 
       if (data.user) {
-        // Create profile with user info
-        const { error: profileError } = await supabase
+        // Profile is created automatically by trigger, just update additional fields
+        await supabase
           .from('profiles')
-          .insert({
-            id: data.user.id,
-            email: formData.email,
+          .update({
             full_name: formData.fullName,
             office_name: formData.officeName,
             phone: formData.phone
           })
-
-        if (profileError) logger.error('Profile insert error:', profileError)
+          .eq('id', data.user.id)
 
         setSuccess(true)
         setTimeout(() => {

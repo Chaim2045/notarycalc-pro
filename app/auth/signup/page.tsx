@@ -74,10 +74,15 @@ export default function SignupPage() {
           })
           .eq('id', data.user.id)
 
-        setSuccess(true)
-        setTimeout(() => {
+        // Check if user needs email confirmation
+        if (data.session) {
+          // User is logged in, go to dashboard
           router.push('/dashboard')
-        }, 2000)
+        } else {
+          // Email confirmation required
+          setSuccess(true)
+          alert('נרשמת בהצלחה! בדוק את האימייל שלך לאימות החשבון')
+        }
       }
     } catch (err: any) {
       setError(err.message || 'שגיאה בהרשמה, נסה שוב')

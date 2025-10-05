@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { supabase } from '@/lib/supabase'
+import { createClient } from '@/lib/supabase'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import Footer from '@/components/Footer'
@@ -9,6 +9,7 @@ import { logger } from '@/lib/logger'
 
 export default function SignupPage() {
   const router = useRouter()
+  const supabase = createClient()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState(false)
@@ -64,27 +65,36 @@ export default function SignupPage() {
       if (signUpError) throw signUpError
 
       if (data.user) {
-        // Profile is created automatically by trigger, just update additional fields
-        await supabase
-          .from('profiles')
-          .update({
-            full_name: formData.fullName,
-            office_name: formData.officeName,
-            phone: formData.phone
-          })
-          .eq('id', data.user.id)
+        // Wait a bit for trigger to create profile
+        await new Promise(resolve => setTimeout(resolve, 500))
 
-        // Check if user needs email confirmation
+        // Update profile with additional fields if session exists
         if (data.session) {
-          // User is logged in, go to dashboard
-          router.push('/dashboard')
-        } else {
-          // Email confirmation required
-          setSuccess(true)
-          alert('נרשמת בהצלחה! בדוק את האימייל שלך לאימות החשבון')
+          try {
+            await supabase
+              .from('profiles')
+              .update({
+                full_name: formData.fullName,
+                office_name: formData.officeName,
+                phone: formData.phone
+              })
+              .eq('id', data.user.id)
+          } catch (updateError) {
+            logger.error('Profile update error:', updateError)
+            // Don't fail signup if update fails
+          }
         }
+
+        // User is created, redirect to dashboard
+        setSuccess(true)
+        setTimeout(() => {
+          window.location.href = '/dashboard'
+        }, 1000)
+      } else {
+        throw new Error('ההרשמה נכשלה. נסה שוב.')
       }
     } catch (err: any) {
+      logger.error('Signup error:', err)
       setError(err.message || 'שגיאה בהרשמה, נסה שוב')
     } finally {
       setLoading(false)

@@ -1,13 +1,14 @@
 'use client'
 
 import { useState } from 'react'
-import { supabase } from '@/lib/supabase'
+import { createClient } from '@/lib/supabase'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import Footer from '@/components/Footer'
 
 export default function LoginPage() {
   const router = useRouter()
+  const supabase = createClient()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -36,12 +37,14 @@ export default function LoginPage() {
 
       if (signInError) throw signInError
 
-      if (data.user) {
-        router.push('/dashboard')
-        router.refresh()
+      if (data.user && data.session) {
+        // Force full page reload to ensure session is properly set
+        window.location.href = '/dashboard'
+      } else {
+        throw new Error('התחברות נכשלה. אין session.')
       }
     } catch (err: any) {
-      setError('אימייל או סיסמה שגויים')
+      setError(err.message || 'אימייל או סיסמה שגויים')
     } finally {
       setLoading(false)
     }

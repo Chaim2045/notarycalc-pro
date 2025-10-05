@@ -1,9 +1,20 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { createClientComponentClient } from '@supabase/auth-helpers-nextjs'
+import { useEffect, useState, useMemo } from 'react'
+import { createClient } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
+import { Button } from '@/components/ui/Button'
+import { Card } from '@/components/ui/Card'
+import { Input } from '@/components/ui/Input'
+import { Badge } from '@/components/ui/Badge'
+import { DataTable, Column } from '@/components/data/DataTable'
+import { Toolbar } from '@/components/data/Toolbar'
+import { Pagination } from '@/components/data/Pagination'
+import Footer from '@/components/Footer'
+import LanguageSwitcher from '@/components/LanguageSwitcher'
+import { useLanguage } from '@/contexts/LanguageContext'
 import { logger } from '@/lib/logger'
+import { toast } from '@/lib/toast'
 
 type Client = {
   id: string
@@ -14,14 +25,21 @@ type Client = {
   address: string | null
   notes: string | null
   created_at: string
+  calculations_count?: number
+  total_revenue?: number
 }
 
 export default function ClientsPage() {
+  const { t } = useLanguage()
   const [clients, setClients] = useState<Client[]>([])
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
   const [editingClient, setEditingClient] = useState<Client | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
+
+  // Pagination
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(25)
 
   const [formData, setFormData] = useState({
     name: '',
@@ -32,7 +50,7 @@ export default function ClientsPage() {
     notes: '',
   })
 
-  const supabase = createClientComponentClient()
+  const supabase = createClient()
   const router = useRouter()
 
   useEffect(() => {
@@ -59,9 +77,37 @@ export default function ClientsPage() {
         .order('created_at', { ascending: false })
 
       if (error) throw error
-      setClients(data || [])
+
+      // Load calculation counts for each client
+      if (data) {
+        const clientsWithStats = await Promise.all(
+          data.map(async (client) => {
+            const { count } = await supabase
+              .from('calculations')
+              .select('*', { count: 'exact', head: true })
+              .eq('user_id', user.id)
+              .eq('client_name', client.name)
+
+            const { data: calcs } = await supabase
+              .from('calculations')
+              .select('total')
+              .eq('user_id', user.id)
+              .eq('client_name', client.name)
+
+            const totalRevenue = calcs?.reduce((sum, c) => sum + c.total, 0) || 0
+
+            return {
+              ...client,
+              calculations_count: count || 0,
+              total_revenue: totalRevenue,
+            }
+          })
+        )
+        setClients(clientsWithStats)
+      }
     } catch (error) {
       logger.error('Error loading clients:', error)
+      toast.error('שגיאה בטעינת לקוחות')
     } finally {
       setLoading(false)
     }
@@ -69,6 +115,12 @@ export default function ClientsPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
+
+    if (!formData.name.trim()) {
+      toast.error('נא להזין שם לקוח')
+      return
+    }
+
     setLoading(true)
 
     try {
@@ -87,6 +139,7 @@ export default function ClientsPage() {
           .eq('user_id', user.id)
 
         if (error) throw error
+        toast.success('לקוח עודכן בהצלחה')
       } else {
         // Create new client
         const { error } = await supabase
@@ -97,20 +150,21 @@ export default function ClientsPage() {
           })
 
         if (error) throw error
+        toast.success('לקוח נוסף בהצלחה')
       }
 
       await loadClients()
       closeModal()
     } catch (error) {
       logger.error('Error saving client:', error)
-      alert('שגיאה בשמירת הלקוח')
+      toast.error('שגיאה בשמירת לקוח')
     } finally {
       setLoading(false)
     }
   }
 
   async function handleDelete(id: string) {
-    if (!confirm('האם אתה בטוח שברצונך למחוק לקוח זה?')) return
+    if (!confirm('האם למחוק לקוח זה?')) return
 
     try {
       const { data: { user } } = await supabase.auth.getUser()
@@ -123,10 +177,12 @@ export default function ClientsPage() {
         .eq('user_id', user.id)
 
       if (error) throw error
+
+      toast.success('לקוח נמחק בהצלחה')
       await loadClients()
     } catch (error) {
       logger.error('Error deleting client:', error)
-      alert('שגיאה במחיקת הלקוח')
+      toast.error('שגיאה במחיקת לקוח')
     }
   }
 
@@ -168,149 +224,247 @@ export default function ClientsPage() {
     })
   }
 
-  const filteredClients = clients.filter(client =>
-    client.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    client.phone?.includes(searchTerm) ||
-    client.email?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    client.id_number?.includes(searchTerm)
-  )
+  // Filtered clients
+  const filteredClients = useMemo(() => {
+    return clients.filter(client =>
+      client.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      client.email?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      client.phone?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      client.id_number?.toLowerCase().includes(searchTerm.toLowerCase())
+    )
+  }, [clients, searchTerm])
+
+  // Paginated clients
+  const paginatedClients = useMemo(() => {
+    const startIndex = (page - 1) * pageSize
+    return filteredClients.slice(startIndex, startIndex + pageSize)
+  }, [filteredClients, page, pageSize])
+
+  // DataTable columns
+  const columns: Column<Client>[] = [
+    {
+      id: 'name',
+      header: 'שם לקוח',
+      accessor: 'name',
+      sortable: true,
+      renderCell: (row) => (
+        <div>
+          <div className="font-medium text-ui-text">{row.name}</div>
+          {row.email && (
+            <div className="text-xs text-ui-text-muted">{row.email}</div>
+          )}
+        </div>
+      ),
+    },
+    {
+      id: 'phone',
+      header: 'טלפון',
+      accessor: 'phone',
+      renderCell: (row) => (
+        <div className="text-sm text-ui-text-secondary">{row.phone || '—'}</div>
+      ),
+    },
+    {
+      id: 'id_number',
+      header: 'ת.ז / ח.פ',
+      accessor: 'id_number',
+      renderCell: (row) => (
+        <div className="text-sm text-ui-text-secondary font-mono">{row.id_number || '—'}</div>
+      ),
+    },
+    {
+      id: 'calculations',
+      header: 'חישובים',
+      align: 'center',
+      renderCell: (row) => (
+        <Badge variant={row.calculations_count && row.calculations_count > 0 ? 'success' : 'neutral'}>
+          {row.calculations_count || 0}
+        </Badge>
+      ),
+    },
+    {
+      id: 'revenue',
+      header: 'הכנסות',
+      align: 'end',
+      renderCell: (row) => (
+        <div className="font-semibold text-ui-text">
+          ₪{(row.total_revenue || 0).toLocaleString()}
+        </div>
+      ),
+    },
+    {
+      id: 'created_at',
+      header: 'נוצר בתאריך',
+      accessor: 'created_at',
+      sortable: true,
+      renderCell: (row) => (
+        <div className="text-sm text-ui-text-secondary">
+          {new Date(row.created_at).toLocaleDateString('he-IL')}
+        </div>
+      ),
+    },
+    {
+      id: 'actions',
+      header: 'פעולות',
+      align: 'end',
+      renderCell: (row) => (
+        <div className="flex items-center gap-2 justify-end">
+          <Button variant="ghost" size="sm" onClick={() => openModal(row)}>
+            ערוך
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => handleDelete(row.id)}
+            className="text-error hover:bg-red-50"
+          >
+            מחק
+          </Button>
+        </div>
+      ),
+    },
+  ]
 
   if (loading && clients.length === 0) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="min-h-screen bg-ui-bg flex items-center justify-center">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
-          <p className="mt-4 text-gray-600">טוען לקוחות...</p>
+          <div className="w-16 h-16 border-4 border-brand-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+          <p className="text-ui-text-secondary">טוען לקוחות...</p>
         </div>
       </div>
     )
   }
 
   return (
-    <div className="min-h-screen bg-gray-50" dir="rtl">
+    <div className="min-h-screen bg-ui-bg">
       {/* Header */}
-      <div className="bg-white border-b">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-          <div className="flex justify-between items-center">
-            <div>
-              <h1 className="text-3xl font-bold text-gray-900">ניהול לקוחות</h1>
-              <p className="mt-1 text-gray-600">נהל את כל הלקוחות שלך במקום אחד</p>
+      <header className="bg-ui-surface border-b border-ui-border">
+        <div className="max-w-7xl mx-auto px-6 py-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-brand-600 rounded-xl flex items-center justify-center">
+                <span className="text-white text-xl font-bold">N</span>
+              </div>
+              <div>
+                <h1 className="text-xl font-bold text-ui-text">ניהול לקוחות</h1>
+                <p className="text-sm text-ui-text-secondary">נהל את רשימת הלקוחות שלך</p>
+              </div>
             </div>
-            <button
-              onClick={() => openModal()}
-              className="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition-colors font-medium"
-            >
-              + הוסף לקוח חדש
-            </button>
-          </div>
-
-          {/* Search */}
-          <div className="mt-6">
-            <input
-              type="text"
-              placeholder="חפש לקוח לפי שם, טלפון, אימייל או ת.ז..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            />
+            <div className="flex items-center gap-3">
+              <LanguageSwitcher />
+              <Button variant="ghost" size="sm" onClick={() => router.push('/dashboard')}>
+                ← חזרה
+              </Button>
+            </div>
           </div>
         </div>
-      </div>
+      </header>
 
-      {/* Clients List */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {filteredClients.length === 0 ? (
-          <div className="bg-white rounded-lg shadow-sm p-12 text-center">
-            <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-            </svg>
-            <h3 className="mt-4 text-lg font-medium text-gray-900">אין לקוחות</h3>
-            <p className="mt-2 text-gray-600">
-              {searchTerm ? 'לא נמצאו לקוחות התואמים לחיפוש' : 'התחל על ידי הוספת לקוח ראשון'}
-            </p>
-          </div>
-        ) : (
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-            {filteredClients.map((client) => (
-              <div key={client.id} className="bg-white rounded-lg shadow-sm p-6 hover:shadow-md transition-shadow">
-                <div className="flex justify-between items-start">
-                  <div className="flex-1">
-                    <h3 className="text-lg font-semibold text-gray-900">{client.name}</h3>
-                    {client.id_number && (
-                      <p className="text-sm text-gray-600 mt-1">ת.ז: {client.id_number}</p>
-                    )}
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => openModal(client)}
-                      className="text-blue-600 hover:text-blue-700 p-1"
-                      title="ערוך"
-                    >
-                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                      </svg>
-                    </button>
-                    <button
-                      onClick={() => handleDelete(client.id)}
-                      className="text-red-600 hover:text-red-700 p-1"
-                      title="מחק"
-                    >
-                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                      </svg>
-                    </button>
-                  </div>
-                </div>
-
-                <div className="mt-4 space-y-2">
-                  {client.phone && (
-                    <div className="flex items-center text-sm text-gray-600">
-                      <svg className="w-4 h-4 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
-                      </svg>
-                      {client.phone}
-                    </div>
-                  )}
-                  {client.email && (
-                    <div className="flex items-center text-sm text-gray-600">
-                      <svg className="w-4 h-4 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                      </svg>
-                      {client.email}
-                    </div>
-                  )}
-                  {client.address && (
-                    <div className="flex items-center text-sm text-gray-600">
-                      <svg className="w-4 h-4 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
-                      </svg>
-                      {client.address}
-                    </div>
-                  )}
-                </div>
-
-                {client.notes && (
-                  <p className="mt-4 text-sm text-gray-600 bg-gray-50 p-3 rounded">
-                    {client.notes}
-                  </p>
-                )}
+      <main className="max-w-7xl mx-auto px-6 py-8">
+        {/* Stats */}
+        <div className="grid md:grid-cols-3 gap-6 mb-8">
+          <Card variant="elevated" padding="md">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-sm font-medium text-ui-text-secondary">סה"כ לקוחות</h3>
+              <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center">
+                <svg className="w-5 h-5 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                </svg>
               </div>
-            ))}
-          </div>
-        )}
-      </div>
+            </div>
+            <p className="text-3xl font-bold text-ui-text">{clients.length}</p>
+          </Card>
 
-      {/* Modal */}
+          <Card variant="elevated" padding="md">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-sm font-medium text-ui-text-secondary">לקוחות פעילים</h3>
+              <div className="w-10 h-10 bg-green-100 rounded-lg flex items-center justify-center">
+                <svg className="w-5 h-5 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              </div>
+            </div>
+            <p className="text-3xl font-bold text-ui-text">
+              {clients.filter(c => c.calculations_count && c.calculations_count > 0).length}
+            </p>
+          </Card>
+
+          <Card variant="elevated" padding="md">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-sm font-medium text-ui-text-secondary">סה"כ הכנסות</h3>
+              <div className="w-10 h-10 bg-purple-100 rounded-lg flex items-center justify-center">
+                <svg className="w-5 h-5 text-purple-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              </div>
+            </div>
+            <p className="text-3xl font-bold text-ui-text">
+              ₪{clients.reduce((sum, c) => sum + (c.total_revenue || 0), 0).toLocaleString()}
+            </p>
+          </Card>
+        </div>
+
+        {/* Data Table */}
+        <Card padding="none" className="overflow-hidden">
+          <Toolbar
+            searchPlaceholder="חפש לקוח..."
+            onSearchChange={setSearchTerm}
+            primaryAction={{
+              label: 'לקוח חדש',
+              onClick: () => openModal(),
+              icon: (
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                </svg>
+              ),
+            }}
+          />
+
+          <DataTable
+            columns={columns}
+            data={paginatedClients}
+            keyField="id"
+            loading={loading}
+            emptyState={{
+              title: 'אין לקוחות עדיין',
+              description: searchTerm ? 'לא נמצאו תוצאות' : 'הוסף את הלקוח הראשון שלך',
+              icon: (
+                <div className="w-16 h-16 bg-neutral-100 rounded-full flex items-center justify-center mx-auto">
+                  <svg className="w-8 h-8 text-neutral-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                  </svg>
+                </div>
+              ),
+            }}
+          />
+
+          <Pagination
+            page={page}
+            pageSize={pageSize}
+            totalRows={filteredClients.length}
+            onPageChange={setPage}
+            onPageSizeChange={(size) => {
+              setPageSize(size)
+              setPage(1)
+            }}
+          />
+        </Card>
+      </main>
+
+      {/* Create/Edit Modal */}
       {showModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-lg max-w-2xl w-full p-6">
-            <div className="flex justify-between items-center mb-6">
-              <h2 className="text-2xl font-bold text-gray-900">
-                {editingClient ? 'עריכת לקוח' : 'לקוח חדש'}
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <Card className="max-w-2xl w-full max-h-[90vh] overflow-y-auto" padding="lg">
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-xl font-bold text-ui-text">
+                {editingClient ? 'ערוך לקוח' : 'לקוח חדש'}
               </h2>
-              <button onClick={closeModal} className="text-gray-400 hover:text-gray-600">
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <button
+                onClick={closeModal}
+                className="text-ui-text-muted hover:text-ui-text"
+              >
+                <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                 </svg>
               </button>
@@ -318,89 +472,80 @@ export default function ClientsPage() {
 
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  שם מלא <span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  required
+                <label className="block text-sm font-medium text-ui-text mb-2">שם לקוח *</label>
+                <Input
                   value={formData.name}
                   onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  placeholder="שם מלא"
+                  required
                 />
               </div>
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">תעודת זהות</label>
-                  <input
-                    type="text"
+                  <label className="block text-sm font-medium text-ui-text mb-2">ת.ז / ח.פ</label>
+                  <Input
                     value={formData.id_number}
                     onChange={(e) => setFormData({ ...formData, id_number: e.target.value })}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    placeholder="123456789"
                   />
                 </div>
+
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">טלפון</label>
-                  <input
-                    type="tel"
+                  <label className="block text-sm font-medium text-ui-text mb-2">טלפון</label>
+                  <Input
                     value={formData.phone}
                     onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    placeholder="050-1234567"
+                    type="tel"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">אימייל</label>
-                <input
-                  type="email"
+                <label className="block text-sm font-medium text-ui-text mb-2">אימייל</label>
+                <Input
                   value={formData.email}
                   onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  placeholder="example@gmail.com"
+                  type="email"
                 />
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">כתובת</label>
-                <input
-                  type="text"
+                <label className="block text-sm font-medium text-ui-text mb-2">כתובת</label>
+                <Input
                   value={formData.address}
                   onChange={(e) => setFormData({ ...formData, address: e.target.value })}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  placeholder="רחוב 1, עיר"
                 />
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">הערות</label>
+                <label className="block text-sm font-medium text-ui-text mb-2">הערות</label>
                 <textarea
-                  rows={3}
                   value={formData.notes}
                   onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  placeholder="הערות נוספות..."
+                  className="w-full px-4 py-3 bg-ui-surface border border-ui-border rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent transition-all text-ui-text placeholder:text-ui-text-muted"
+                  rows={3}
                 />
               </div>
 
               <div className="flex gap-3 pt-4">
-                <button
-                  type="submit"
-                  disabled={loading}
-                  className="flex-1 bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700 transition-colors font-medium disabled:opacity-50"
-                >
-                  {loading ? 'שומר...' : editingClient ? 'עדכן לקוח' : 'הוסף לקוח'}
-                </button>
-                <button
-                  type="button"
-                  onClick={closeModal}
-                  className="flex-1 bg-gray-200 text-gray-700 py-3 rounded-lg hover:bg-gray-300 transition-colors font-medium"
-                >
+                <Button type="submit" variant="primary" isLoading={loading} className="flex-1">
+                  {editingClient ? 'עדכן לקוח' : 'צור לקוח'}
+                </Button>
+                <Button type="button" variant="secondary" onClick={closeModal}>
                   ביטול
-                </button>
+                </Button>
               </div>
             </form>
-          </div>
+          </Card>
         </div>
       )}
+
+      <Footer />
     </div>
   )
 }

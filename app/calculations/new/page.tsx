@@ -2,8 +2,9 @@
 
 import { useState, useCallback, useMemo, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { createClientComponentClient } from '@supabase/auth-helpers-nextjs'
+import { createClient } from '@/lib/supabase'
 import { logger } from '@/lib/logger'
+import { toast } from '@/lib/toast'
 import {
   RATES,
   VAT_RATE,
@@ -472,7 +473,7 @@ function CalculationBreakdown({ service }: { service: Service }) {
 // Main Calculator Component
 export default function NewCalculationPage() {
   const router = useRouter()
-  const supabase = createClientComponentClient()
+  const supabase = createClient()
 
   const [services, setServices] = useState<Service[]>([
     {
@@ -496,7 +497,42 @@ export default function NewCalculationPage() {
 
   useEffect(() => {
     loadClients()
+    loadTemplateFromLocalStorage()
   }, [])
+
+  function loadTemplateFromLocalStorage() {
+    try {
+      const savedTemplate = localStorage.getItem('selectedTemplate')
+      if (savedTemplate) {
+        const template = JSON.parse(savedTemplate)
+
+        if (template.services && Array.isArray(template.services) && template.services.length > 0) {
+          // Convert template services to calculation services format
+          const convertedServices = template.services.map((service: any, index: number) => ({
+            id: Date.now() + index,
+            type: service.type || 'signature',
+            subType: service.subType || 'first',
+            quantity: service.quantity || 1,
+            copies: service.copies || 1,
+            pages: service.pages || 1,
+            description: service.description || service.name || 'שירות',
+            basePrice: service.price || service.basePrice || 0,
+            includeTranslation: service.includeTranslation || false,
+            translationWords: service.translationWords || 0,
+          }))
+
+          setServices(convertedServices)
+          toast.success(`תבנית "${template.name}" נטענה בהצלחה! ${convertedServices.length} שירותים`)
+        }
+
+        // Clean up localStorage
+        localStorage.removeItem('selectedTemplate')
+      }
+    } catch (error) {
+      logger.error('Error loading template from localStorage:', error)
+      toast.error('שגיאה בטעינת התבנית')
+    }
+  }
 
   async function loadClients() {
     try {

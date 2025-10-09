@@ -23,9 +23,9 @@ export async function generateCalculationPDF(options: PDFExportOptions): Promise
   }
 
   // Colors
-  const primaryColor = [59, 130, 246] // brand-600
-  const textColor = [14, 14, 14]
-  const secondaryColor = [107, 114, 128]
+  const primaryColor: [number, number, number] = [59, 130, 246] // brand-600
+  const textColor: [number, number, number] = [14, 14, 14]
+  const secondaryColor: [number, number, number] = [107, 114, 128]
 
   // Header - Company Info
   doc.setFontSize(20)

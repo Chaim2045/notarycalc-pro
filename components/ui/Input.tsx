@@ -14,7 +14,7 @@
 import { InputHTMLAttributes, forwardRef } from 'react'
 import { cn } from '@/lib/utils'
 
-export interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
+export interface InputProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 'prefix' | 'size'> {
   variant?: 'default' | 'error'
   inputSize?: 'sm' | 'md' | 'lg'
   prefix?: React.ReactNode

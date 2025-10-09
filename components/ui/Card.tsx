@@ -71,10 +71,21 @@ const Card = forwardRef<HTMLDivElement, CardProps>(
       `
       : ''
 
+    const classNames = cn(
+      baseStyles,
+      variants[variant],
+      paddings[padding],
+      interactiveStyles,
+      className
+    )
+
     // Subtle 3D depth animation (Linear-style)
-    const motionProps = interactive
-      ? {
-          whileHover: {
+    if (interactive) {
+      return (
+        <motion.div
+          ref={ref}
+          className={classNames}
+          whileHover={{
             rotateX: -2,
             rotateY: 2,
             translateZ: 8,
@@ -82,37 +93,35 @@ const Card = forwardRef<HTMLDivElement, CardProps>(
               duration: 0.3,
               ease: [0.22, 1, 0.36, 1],
             },
-          },
-          whileTap: {
+          }}
+          whileTap={{
             scale: 0.98,
             transition: {
               duration: 0.15,
             },
-          },
-          style: {
+          }}
+          style={{
             transformStyle: 'preserve-3d' as const,
             perspective: 1200,
-          },
-        }
-      : {}
-
-    const Component = interactive ? motion.div : 'div'
+            ...props.style,
+          }}
+          onClick={props.onClick}
+          onMouseEnter={props.onMouseEnter}
+          onMouseLeave={props.onMouseLeave}
+        >
+          {children}
+        </motion.div>
+      )
+    }
 
     return (
-      <Component
+      <div
         ref={ref}
-        className={cn(
-          baseStyles,
-          variants[variant],
-          paddings[padding],
-          interactiveStyles,
-          className
-        )}
-        {...motionProps}
+        className={classNames}
         {...props}
       >
         {children}
-      </Component>
+      </div>
     )
   }
 )
